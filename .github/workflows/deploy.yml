@@ -5,14 +5,18 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Allow one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pages: write
   id-token: write
-  actions: read
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,15 +25,24 @@ jobs:
       - name: Create config.js from secret
         run: |
           echo "const config = { apiBaseUrl: '${{ secrets.API_BASE_URL }}' };" > config.js
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
+          echo "Created config.js with API URL"
+          cat config.js
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: '.'
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    # This environment section is REQUIRED for GitHub Pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
