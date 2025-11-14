@@ -25,23 +25,8 @@ jobs:
       - name: Create config.js from secret
         run: |
           echo "const config = { apiBaseUrl: '${{ secrets.API_BASE_URL }}' };" > config.js
-          echo "--- Created config.js ---"
+          echo "Created config.js with API URL"
           cat config.js
-          echo "--- Listing all files to be uploaded ---"
-          ls -la
-          echo "--- Checking config.js exists ---"
-          if [ -f config.js ]; then 
-            echo "✓ config.js exists"
-            echo "✓ config.js size: $(wc -c < config.js) bytes"
-          else 
-            echo "✗ config.js missing!"
-            exit 1
-          fi
-
-      - name: List files before upload
-        run: |
-          echo "=== Files that will be uploaded ==="
-          find . -type f -not -path '*/\.git/*' | sort
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
