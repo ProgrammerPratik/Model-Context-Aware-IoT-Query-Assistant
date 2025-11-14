@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Fleet Management</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="main-container">
+        <div class="dashboard-panel">
+            <!-- Fleet Overview View -->
+            <div id="fleet-view">
+                <h1>IoT Fleet Overview</h1>
+                
+                <div id="error-banner" class="error-banner hidden"></div>
+
+                <div class="summary-grid">
+                    <div class="summary-card">
+                        <h3>Total Devices</h3>
+                        <span class="summary-value" id="total-devices">0</span>
+                    </div>
+                    <div class="summary-card online">
+                        <h3>Online</h3>
+                        <span class="summary-value" id="online-devices">0</span>
+                    </div>
+                    <div class="summary-card updates">
+                        <h3>Firmware Updates</h3>
+                        <span class="summary-value" id="updates-needed">0</span>
+                    </div>
+                    <div class="summary-card overheating">
+                        <h3>Overheating</h3>
+                        <span class="summary-value" id="overheating-devices">0</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>All Devices</h2>
+                    <table class="device-table">
+                        <thead>
+                            <tr>
+                                <th>Device ID</th>
+                                <th>Status</th>
+                                <th>Temperature</th>
+                                <th>Firmware</th>
+                            </tr>
+                        </thead>
+                        <tbody id="device-list-body">
+                            <tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">Loading devices...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Device Detail View -->
+            <div id="device-view" class="hidden">
+                <h1>
+                    <span>Device: <span id="current-device-id" style="color: var(--accent-color);"></span></span>
+                    <button class="back-btn" onclick="app.showFleetView()">← Back to Fleet</button>
+                </h1>
+
+                <div class="card">
+                    <h2>Device Summary</h2>
+                    <div id="device-summary" class="data-grid"></div>
+                </div>
+
+                <div class="card">
+                    <h2>Temperature History</h2>
+                    <canvas id="tempChart"></canvas>
+                </div>
+
+                <div class="card">
+                    <h2>Device State (Shadow)</h2>
+                    <div id="shadow-data" class="data-grid"></div>
+                </div>
+
+                <div class="card">
+                    <h2>Latest Telemetry</h2>
+                    <div id="latest-telemetry" class="data-grid"></div>
+                </div>
+
+                <div class="card">
+                    <h2>Recent Telemetry Log</h2>
+                    <div id="recent-telemetry"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-panel">
+            <div class="chat-header">
+                <h2>AI Assistant</h2>
+            </div>
+            <div class="chat-mode-selector">
+                <!-- <button class="mode-btn active" data-mode="query" onclick="app.setMode('query')">Query Mode</button> -->
+                <button class="mode-btn" data-mode="control" onclick="app.setMode('control')">Control Mode</button>
+                <button class="mode-btn" data-mode="summary" onclick="app.setMode('summary')">Summary Mode</button>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+                <div class="placeholder-message">
+                    <h3>Welcome!</h3>
+                    <p>Select a mode and start chatting with your IoT devices.</p>
+                    <p style="font-size: 0.9em; margin-top: 10px;">
+                        <!-- <strong>Query:</strong> Ask about device metrics<br> -->
+                        <strong>Control:</strong> Send commands to devices<br>
+                        <strong>Summary:</strong> Get AI summaries
+                    </p>
+                </div>
+            </div>
+            <div class="chat-input-area">
+                <input type="text" id="chat-input" placeholder="Ask me anything about your devices...">
+                <button id="send-btn" onclick="app.sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+    <script src="config.js"></script>
+    <script>    
+        const app = {
+            baseUrl: config.apiBaseUrl,
+            currentView: 'fleet',
+            currentDevice: null,
+            chatMode: 'control',
+            devices: [],
+            tempChart: null,
+            updateInterval: null,
+
+            init() {
+                this.loadDevices();
+                // Auto-refresh device list every 5 seconds in fleet view
+                setInterval(() => {
+                    if (this.currentView === 'fleet') {
+                        this.loadDevices();
+                    }
+                }, 5000);
+                document.getElementById('chat-input').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.sendMessage();
+                });
+            },
+
+            async fetchAPI(endpoint, options = {}) {
+                try {
+                    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+                        headers: { 'Accept': 'application/json', ...options.headers },
+                        ...options
+                    });
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return await response.json();
+                } catch (error) {
+                    console.error('API Error:', error);
+                    this.showError(`Failed to fetch data: ${error.message}`);
+                    return null;
+                }
+            },
+
+            showError(message) {
+                const banner = document.getElementById('error-banner');
+                banner.textContent = message;
+                banner.classList.remove('hidden');
+                setTimeout(() => banner.classList.add('hidden'), 5000);
+            },
+
+            async loadDevices() {
+                // First, fetch the list of all device IDs
+                const deviceListResponse = await this.fetchAPI('/devices');
+                
+                if (!deviceListResponse || !deviceListResponse.devices) {
+                    this.showError('Failed to fetch device list');
+                    return;
+                }
+
+                // Extract device IDs - handle both array of strings and array of objects
+                let deviceIds = deviceListResponse.devices;
+                
+                // If devices is an array of objects, extract the deviceId or id property
+                if (deviceIds.length > 0 && typeof deviceIds[0] === 'object') {
+                    deviceIds = deviceIds.map(device => device.deviceId || device.id || device.device_id);
+                }
+
+                const devices = [];
+
+                // Fetch details for each device
+                for (const deviceId of deviceIds) {
+                    const [shadow, latest] = await Promise.all([
+                        this.fetchAPI(`/devices/${deviceId}/shadow`),
+                        this.fetchAPI(`/devices/${deviceId}/latest`)
+                    ]);
+
+                    if (shadow && latest) {
+                        devices.push({ deviceId, shadow, latest });
+                    }
+                }
+
+                this.devices = devices;
+                this.renderFleetView();
+            },
+
+            renderFleetView() {
+                const TEMP_THRESHOLD = 40;
+                let online = 0, updates = 0, overheating = 0;
+
+                const tbody = document.getElementById('device-list-body');
+                tbody.innerHTML = '';
+
+                this.devices.forEach(device => {
+                    const status = device.latest?.status || 'unknown';
+                    const temp = device.latest?.temperature || 0;
+                    // Check if device state is being changed (desired != reported)
+const desiredState = device.shadow?.state?.desired?.power || device.shadow?.state?.desired?.state;
+const reportedState = device.shadow?.state?.reported?.power || device.shadow?.state?.reported?.state;
+const stateChanging = desiredState && desiredState !== reportedState;
+                    const reportedFw = device.shadow?.state?.reported?.firmware || device.shadow?.state?.reported?.firmware_version || 'N/A';
+const desiredFw = device.shadow?.state?.desired?.firmware || device.shadow?.state?.desired?.firmware_version || reportedFw;
+
+                    if (status === 'online') online++;
+                    if (reportedFw !== desiredFw) updates++;
+                    if (temp > TEMP_THRESHOLD) overheating++;
+
+                    const tempClass = temp > TEMP_THRESHOLD ? 'status-danger' : 'status-ok';
+                    const fwClass = reportedFw !== desiredFw ? 'status-warning' : 'status-ok';
+                    const statusClass = status === 'online' ? 'status-ok' : 'status-offline';
+
+                    const row = document.createElement('tr');
+                    row.onclick = () => this.showDeviceView(device.deviceId);
+                    row.innerHTML = `
+                        <td>${device.deviceId}</td>
+                        <td>
+    <span class="status-indicator ${statusClass}">${status}</span>
+    ${stateChanging ? `<span class="status-indicator status-warning" style="margin-left: 5px;">Pending: ${desiredState}</span>` : ''}
+</td>
+                        <td><span class="status-indicator ${tempClass}">${temp}°C</span></td>
+                        <td>${reportedFw} ${reportedFw !== desiredFw ? `<span class="status-indicator ${fwClass}">Update available</span>` : '<span class="status-indicator status-ok">Up to date</span>'}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                document.getElementById('total-devices').textContent = this.devices.length;
+                document.getElementById('online-devices').textContent = online;
+                document.getElementById('updates-needed').textContent = updates;
+                document.getElementById('overheating-devices').textContent = overheating;
+            },
+
+            showDeviceView(deviceId) {
+                this.currentDevice = deviceId;
+                this.currentView = 'device';
+                document.getElementById('fleet-view').classList.add('hidden');
+                document.getElementById('device-view').classList.remove('hidden');
+                document.getElementById('current-device-id').textContent = deviceId;
+                
+                this.loadDeviceDetails();
+                this.updateInterval = setInterval(() => this.loadDeviceDetails(), 10000);
+            },
+
+            showFleetView() {
+                this.currentView = 'fleet';
+                this.currentDevice = null;
+                document.getElementById('device-view').classList.add('hidden');
+                document.getElementById('fleet-view').classList.remove('hidden');
+                
+                if (this.updateInterval) {
+                    clearInterval(this.updateInterval);
+                    this.updateInterval = null;
+                }
+                
+                this.loadDevices();
+            },
+
+            async loadDeviceDetails() {
+                const deviceId = this.currentDevice;
+                const [shadow, latest, recent] = await Promise.all([
+                    this.fetchAPI(`/devices/${deviceId}/shadow`),
+                    this.fetchAPI(`/devices/${deviceId}/latest`),
+                    this.fetchAPI(`/devices/${deviceId}/recent`)
+                ]);
+
+                if (shadow?.state?.reported) {
+                    this.displayKeyValue('shadow-data', shadow.state.reported);
+                }
+
+                if (latest) {
+                    this.displayKeyValue('latest-telemetry', latest);
+                    this.displayDeviceSummary(latest, shadow);
+                }
+
+                if (recent) {
+                    this.displayRecentTelemetry(recent);
+                    this.updateChart(recent);
+                }
+            },
+
+            displayKeyValue(elementId, data) {
+                const container = document.getElementById(elementId);
+                container.innerHTML = '';
+                
+                for (const [key, value] of Object.entries(data)) {
+                    const displayValue = typeof value === 'object' ? JSON.stringify(value, null, 2) : value;
+                    container.innerHTML += `
+                        <div class="data-key">${key}:</div>
+                        <div class="data-value">${displayValue}</div>
+                    `;
+                }
+            },
+
+            displayDeviceSummary(latest, shadow) {
+                const container = document.getElementById('device-summary');
+                const status = latest?.status || 'unknown';
+                const temp = latest.temperature || 0;
+                const tempStatus = temp > 40 ? 'Overheating' : 'Normal';
+                const tempClass = temp > 40 ? 'status-danger' : 'status-ok';
+
+                container.innerHTML = `
+                    <div class="data-key">Status:</div>
+                    <div class="data-value">${status}</div>
+                    <div class="data-key">Temperature:</div>
+                    <div class="data-value"><span class="status-indicator ${tempClass}">${temp}°C (${tempStatus})</span></div>
+                    <div class="data-key">Last Update:</div>
+                    <div class="data-value">${this.formatTime(latest.timestamp)}</div>
+                `;
+            },
+
+            displayRecentTelemetry(data) {
+                const container = document.getElementById('recent-telemetry');
+                if (!data || data.length === 0) {
+                    container.innerHTML = '<p style="color: var(--text-secondary);">No recent data available.</p>';
+                    return;
+                }
+
+                let table = '<table class="device-table"><thead><tr><th>Timestamp</th><th>Uptime</th><th>Temperature</th><th>Firmware</th></tr></thead><tbody>';
+                data.forEach(item => {
+                    table += `
+                        <tr>
+                            <td>${this.formatTime(item.timestamp)}</td>
+                            <td>${item.uptime || 'N/A'}</td>
+                            <td>${item.temperature || 'N/A'}°C</td>
+                            <td>${item.firmware || item.firmware_version || 'N/A'}</td>
+                        </tr>
+                    `;
+                });
+                table += '</tbody></table>';
+                container.innerHTML = table;
+            },
+
+            updateChart(data) {
+                const ctx = document.getElementById('tempChart').getContext('2d');
+                const labels = data.map(item => this.formatTime(item.timestamp));
+                const temps = data.map(item => item.temperature || 0);
+
+                if (this.tempChart) {
+                    this.tempChart.destroy();
+                }
+
+                this.tempChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Temperature (°C)',
+                            data: temps,
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            fill: true,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        scales: {
+                            y: { beginAtZero: false }
+                        }
+                    }
+                });
+            },
+
+            formatTime(timestamp) {
+                if (!timestamp) return 'N/A';
+                const date = new Date(parseInt(timestamp));
+                return date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+            },
+
+            setMode(mode) {
+                this.chatMode = mode;
+                document.querySelectorAll('.mode-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === mode);
+                });
+
+                const input = document.getElementById('chat-input');
+                const placeholders = {
+                    query: 'Ask me anything about your devices...',
+                    control: 'Send a command (e.g., "Turn off esp32_01")',
+                    summary: 'Get AI summary of device telemetry'
+                };
+                input.placeholder = placeholders[mode];
+            },
+
+            async sendMessage() {
+                const input = document.getElementById('chat-input');
+                const message = input.value.trim();
+
+                // For summary mode, we don't need user input
+                if (this.chatMode === 'summary') {
+                    if (!this.currentDevice) {
+                        this.addChatMessage('Please select a device first to get a summary.', 'assistant');
+                        return;
+                    }
+                    
+                    const container = document.getElementById('chat-messages');
+                    const placeholder = container.querySelector('.placeholder-message');
+                    if (placeholder) placeholder.remove();
+
+                    this.addChatMessage(`Generating summary for ${this.currentDevice}...`, 'user');
+                    input.value = '';
+
+                    const loadingMsg = this.addChatMessage('Analyzing device telemetry data...', 'loading');
+
+                    const response = await this.fetchAPI(`/devices/${this.currentDevice}/summary`, {
+                        method: 'POST'
+                    });
+
+                    loadingMsg.remove();
+
+                    if (response) {
+                        const text = response.summary || response.message || JSON.stringify(response);
+                        this.addChatMessage(text, 'assistant');
+                    } else {
+                        this.addChatMessage('Failed to generate summary. Please try again.', 'assistant');
+                    }
+                    return;
+                }
+
+                // For query and control modes, require user input
+                if (!message) return;
+
+                this.addChatMessage(message, 'user');
+                input.value = '';
+
+                const container = document.getElementById('chat-messages');
+                const placeholder = container.querySelector('.placeholder-message');
+                if (placeholder) placeholder.remove();
+
+                const loadingMsg = this.addChatMessage('Processing...', 'loading');
+
+                let response;
+                if (this.chatMode === 'query') {
+                    response = await this.fetchAPI('/devices/ai/query', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt: message })
+                    });
+                } else if (this.chatMode === 'control') {
+    response = await this.fetchAPI('/devices/ai/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: message })
+    });
+
+    // Extract device info from response and apply the change
+    if (response && response.deviceId) {
+        const deviceId = response.deviceId;
+        const desiredState = response.desiredState || response.desired || {};
+        
+        // Update shadow
+        const shadowUpdate = await this.fetchAPI(`/devices/${deviceId}/shadow`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ desired: desiredState })
+        });
+
+        // Reload device list to show changes
+        if (this.currentView === 'fleet') {
+            await this.loadDevices();
+        } else if (this.currentView === 'device' && this.currentDevice === deviceId) {
+            await this.loadDeviceDetails();
+        }
+    }
+}
+
+loadingMsg.remove();
+
+if (response) {
+    const text = response.answer || response.message || JSON.stringify(response);
+    this.addChatMessage(text, 'assistant');
+                } else {
+                    this.addChatMessage('Failed to get response. Please try again.', 'assistant');
+                }
+            },
+
+            addChatMessage(text, type) {
+                const container = document.getElementById('chat-messages');
+                const msg = document.createElement('div');
+                msg.className = `chat-message ${type}`;
+                msg.textContent = text;
+                container.appendChild(msg);
+                container.scrollTop = container.scrollHeight;
+                return msg;
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', () => app.init());
+    </script>
+</body>
+</html>
